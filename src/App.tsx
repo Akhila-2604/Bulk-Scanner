@@ -41,13 +41,42 @@ export default function App() {
   const [ipResults, setIpResults] = useState<IpResult[]>([]);
   const [domainResults, setDomainResults] = useState<DomainResult[]>([]);
   
+  // New API Key States
+  const [apiKey, setApiKey] = useState<string>("");
+  const [isKeySaved, setIsKeySaved] = useState<boolean>(false);
+  const [keyError, setKeyError] = useState<string>("");
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isParsingFile, setIsParsingFile] = useState<boolean>(false);
   const [parsedFromFile, setParsedFromFile] = useState<ParsedTargets | null>(null);
   const [isPending, setIsPending] = useState<boolean>(false);
 
-  // --- ANALYSIS LOGIC (With realistic data matching your uploaded report model) ---
+  // --- API KEY MANAGEMENT ---
+  const handleSaveKey = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!apiKey.trim()) {
+      setKeyError("API Key cannot be blank.");
+      return;
+    }
+    setKeyError("");
+    setIsKeySaved(true);
+  };
+
+  const handleClearKey = () => {
+    setApiKey("");
+    setIsKeySaved(false);
+    setIpResults([]);
+    setDomainResults([]);
+  };
+
+  // --- ANALYSIS LOGIC ---
   const handleSubmit = () => {
+    // Structural Guard Rail: Prevent scanning if key is missing
+    if (!isKeySaved) {
+      setKeyError("Authentication Failed: Please save a valid ThreatIntel API Key to proceed.");
+      return;
+    }
+
     const targets = inputText
       .split(/[\n,]+/)
       .map((t) => t.trim())
@@ -64,24 +93,21 @@ export default function App() {
       if (activeTab === "ip") {
         setIpResults(targets.map(t => {
           const score = Math.floor(Math.random() * 100);
-          let status: "Clean" | "Suspicious" | "Malicious" = "Clean";
+          let status = "Clean";
           if (score > 75) status = "Malicious";
           else if (score > 40) status = "Suspicious";
-
-          const totalReports = status === "Clean" ? 0 : Math.floor(Math.random() * 2000) + 10;
-          const numDistinctUsers = status === "Clean" ? 0 : Math.floor(totalReports * (Math.random() * 0.3 + 0.1));
 
           return {
             target: t,
             status,
             abuseConfidenceScore: score,
-            totalReports,
-            numDistinctUsers,
-            countryCode: ["US", "DE", "SG", "ID", "VN", "MY"][Math.floor(Math.random() * 6)],
-            isp: ["PT. NEWTON CIPTA INFORMATIKA", "RW-Hosting SAS", "BYTEPLUS SERVICES", "AMAZON NETWORK", "GOOGLE PUBLIC CLOUD"][Math.floor(Math.random() * 5)],
+            totalReports: status === "Clean" ? 0 : Math.floor(Math.random() * 1500) + 5,
+            numDistinctUsers: status === "Clean" ? 0 : Math.floor(Math.random() * 300),
+            countryCode: ["US", "DE", "SG", "ID", "VN"][Math.floor(Math.random() * 5)],
+            isp: ["PT. NEWTON CIPTA INFORMATIKA", "RW-Hosting SAS", "BYTEPLUS SERVICES", "AMAZON NETWORKS"][Math.floor(Math.random() * 4)],
             domain: "network-node.net",
             usageType: "Data Center/Web Hosting/Transit",
-            lastReportedAt: new Date(Date.now() - Math.random() * 86400000).toISOString(),
+            lastReportedAt: new Date().toISOString(),
             isPublic: true,
             isWhitelisted: false,
             isTor: Math.random() > 0.95,
@@ -92,24 +118,20 @@ export default function App() {
         setDomainResults(targets.map(t => {
           const malCount = Math.floor(Math.random() * 20);
           const suspCount = Math.floor(Math.random() * 8);
-          let status: "Clean" | "Suspicious" | "Malicious" = "Clean";
-          
+          let status = "Clean";
           if (malCount > 5) status = "Malicious";
           else if (malCount > 0 || suspCount > 0) status = "Suspicious";
-
-          const totalEngines = 68;
-          const reputation = Math.max(0, 100 - (malCount * 5 + suspCount * 2));
 
           return {
             target: t,
             status,
             maliciousCount: malCount,
             suspiciousCount: suspCount,
-            harmlessCount: totalEngines - (malCount + suspCount),
-            totalEngines,
-            reputation,
-            categories: ["Malicious, Phishing", "Spam Networks", "Clean System", "Suspicious Host"][Math.floor(Math.random() * 4)],
-            lastAnalysisDate: new Date(Date.now() - Math.random() * 86400000).toISOString(),
+            harmlessCount: 68 - (malCount + suspCount),
+            totalEngines: 68,
+            reputation: Math.max(0, 100 - (malCount * 5)),
+            categories: ["Malicious, Phishing", "Spam Networks", "Clean System"][Math.floor(Math.random() * 3)],
+            lastAnalysisDate: new Date().toISOString(),
             error: null
           };
         }));
@@ -127,7 +149,6 @@ export default function App() {
       if (statusText === "clean" || statusText === "harmless") clean++;
       else if (statusText === "suspicious") suspicious++;
       else if (statusText === "malicious") malicious++;
-      else clean++;
     });
 
     return { total: currentResults.length, clean, suspicious, malicious };
@@ -148,61 +169,20 @@ export default function App() {
 
   const ts = () => new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 
-  // EXPLICIT ROW EXPORTER (Aligns values seamlessly inside spreadsheet columns)
   const exportCsv = () => {
     if (activeTab === "ip" && !ipResults.length) return;
     if (activeTab === "domain" && !domainResults.length) return;
 
     let csvContent = "";
-
     if (activeTab === "ip") {
-      const headers = [
-        "IP Address", "Status", "Abuse Confidence Score", "Total Reports", 
-        "Distinct Users", "Country Code", "ISP", "Domain", "Usage Type", 
-        "Last Reported At", "Is Public", "Is Whitelisted", "Is Tor", "Error"
-      ];
-      
-      const rows = ipResults.map(r => [
-        `"${r.target}"`,
-        `"${r.status}"`,
-        `"${r.abuseConfidenceScore}"`,
-        `"${r.totalReports ?? 0}"`,
-        `"${r.numDistinctUsers ?? 0}"`,
-        `"${r.countryCode ?? ""}"`,
-        `"${r.isp ?? ""}"`,
-        `"${r.domain ?? ""}"`,
-        `"${r.usageType ?? ""}"`,
-        `"${r.lastReportedAt ?? ""}"`,
-        `"${r.isPublic ?? ""}"`,
-        `"${r.isWhitelisted ?? ""}"`,
-        `"${r.isTor ?? ""}"`,
-        `"${r.error ?? ""}"`
-      ]);
-      
+      const headers = ["IP Address", "Status", "Abuse Confidence Score", "Total Reports", "Distinct Users", "Country Code", "ISP", "Usage Type", "Last Reported At"];
+      const rows = ipResults.map(r => [`"${r.target}"`, `"${r.status}"`, `"${r.abuseConfidenceScore}"`, `"${r.totalReports}"`, `"${r.numDistinctUsers}"`, `"${r.countryCode}"`, `"${r.isp}"`, `"${r.usageType}"`, `"${r.lastReportedAt}"`]);
       csvContent = [headers.join(","), ...rows.map(row => row.join(","))].join("\n");
     } else {
-      const headers = [
-        "Domain/URL", "Status", "Malicious Count", "Suspicious Count", 
-        "Harmless Count", "Total Engines", "Reputation", "Categories", 
-        "Last Analysis Date", "Error"
-      ];
-      
-      const rows = domainResults.map(r => [
-        `"${r.target}"`,
-        `"${r.status}"`,
-        `"${r.maliciousCount}"`,
-        `"${r.suspiciousCount}"`,
-        `"${r.harmlessCount ?? 0}"`,
-        `"${r.totalEngines}"`,
-        `"${r.reputation ?? ""}"`,
-        `"${r.categories ?? ""}"`,
-        `"${r.lastAnalysisDate ?? ""}"`,
-        `"${r.error ?? ""}"`
-      ]);
-
+      const headers = ["Domain/URL", "Status", "Malicious Count", "Suspicious Count", "Total Engines", "Categories", "Last Analysis Date"];
+      const rows = domainResults.map(r => [`"${r.target}"`, `"${r.status}"`, `"${r.maliciousCount}"`, `"${r.suspiciousCount}"`, `"${r.totalEngines}"`, `"${r.categories}"`, `"${r.lastAnalysisDate}"`]);
       csvContent = [headers.join(","), ...rows.map(row => row.join(","))].join("\n");
     }
-
     triggerDownload(csvContent, `${activeTab}-scan-${ts()}.csv`, "text/csv;charset=utf-8;");
   };
 
@@ -231,17 +211,14 @@ export default function App() {
         lines.push(`STATUS      : ${r.status.toUpperCase()}`);
         lines.push(`ABUSE SCORE : ${r.abuseConfidenceScore}/100`);
         lines.push(`REPORTS     : ${r.totalReports ?? 0} (${r.numDistinctUsers ?? 0} distinct users)`);
-        if (r.countryCode) lines.push(`COUNTRY     : ${r.countryCode}`);
-        if (r.isp)         lines.push(`ISP         : ${r.isp}`);
+        lines.push(`ISP         : ${r.isp} (${r.countryCode})`);
         lines.push(`------------------------------------------------------------------------`, "");
       });
     } else {
       domainResults.forEach((r) => {
         lines.push(`TARGET     : ${r.target}`);
         lines.push(`STATUS     : ${r.status.toUpperCase()}`);
-        lines.push(`DETECTIONS : ${r.maliciousCount} malicious / ${r.suspiciousCount} suspicious`);
-        lines.push(`ENGINES    : Total Engines scanned: ${r.totalEngines}`);
-        if (r.categories) lines.push(`CATEGORIES : ${r.categories}`);
+        lines.push(`DETECTIONS : ${r.maliciousCount} malicious / ${r.suspiciousCount} suspicious (${r.totalEngines} engines)`);
         lines.push(`------------------------------------------------------------------------`, "");
       });
     }
@@ -273,8 +250,46 @@ export default function App() {
   return (
     <div style={{ maxWidth: '950px', margin: '40px auto', padding: '20px', fontFamily: 'system-ui, sans-serif', color: '#333' }}>
       
-      {/* Input Module Form */}
-      <div style={{ border: '1px solid #e2e8f0', padding: '24px', borderRadius: '12px', background: '#ffffff', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }}>
+      {/* 1. NEW: API Authentication Config Panel */}
+      <div style={{ border: '1px solid #cbd5e1', padding: '16px 20px', borderRadius: '12px', background: isKeySaved ? '#f0fdf4' : '#fff1f2', marginBottom: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span style={{ fontSize: '20px' }}>{isKeySaved ? "🔑" : "🔒"}</span>
+          <div>
+            <h4 style={{ margin: '0 0 2px 0', color: isKeySaved ? '#166534' : '#991b1b', fontSize: '14px', fontWeight: '700' }}>
+              {isKeySaved ? "ThreatIntel API Authenticated" : "API Key Required"}
+            </h4>
+            <p style={{ margin: 0, fontSize: '12px', color: isKeySaved ? '#166534' : '#991b1b', opacity: 0.8 }}>
+              {isKeySaved ? "Your key is active. Scanning operations unlocked." : "Provide an API key configuration block below to proceed with bulk analysis."}
+            </p>
+          </div>
+        </div>
+
+        <form onSubmit={handleSaveKey} style={{ display: 'flex', gap: '8px', marginLeft: 'auto', width: '100%', maxWidth: '380px' }}>
+          <input
+            type="password"
+            placeholder="Paste your API key here..."
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            disabled={isKeySaved}
+            style={{ flexGrow: 1, padding: '8px 12px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px', background: isKeySaved ? '#e2e8f0' : '#fff', outline: 'none' }}
+          />
+          {isKeySaved ? (
+            <button type="button" onClick={handleClearKey} style={{ padding: '8px 14px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600' }}>Disconnect</button>
+          ) : (
+            <button type="submit" style={{ padding: '8px 14px', background: '#1e293b', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600' }}>Save Key</button>
+          )}
+        </form>
+      </div>
+
+      {/* Global Validation Alert Output */}
+      {keyError && (
+        <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b', padding: '12px 16px', borderRadius: '8px', marginBottom: '20px', fontSize: '13px', fontWeight: '600' }}>
+          ⚠️ {keyError}
+        </div>
+      )}
+
+      {/* 2. Primary Input Console Form */}
+      <div style={{ border: '1px solid #e2e8f0', padding: '24px', borderRadius: '12px', background: '#ffffff', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', opacity: isKeySaved ? 1 : 0.65, pointerEvents: isKeySaved ? 'auto' : 'none', transition: 'opacity 0.2s' }}>
         <h2 style={{ margin: '0 0 20px 0', color: '#1a202c' }}>🛡️ Bulk Reputation Scanner</h2>
         
         <div style={{ marginBottom: '20px', display: 'flex', gap: '10px' }}>
@@ -314,15 +329,15 @@ export default function App() {
           placeholder={activeTab === "ip" ? "Enter IPs (one per line or comma-separated)..." : "Enter domains..."}
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
-          disabled={isPending}
+          disabled={isPending || !isKeySaved}
         />
 
         <div style={{ display: 'flex', marginTop: '15px', alignItems: 'center' }}>
           <span style={{ fontSize: '14px', color: '#718096', fontWeight: '500' }}>{targetCount} Targets Loaded</span>
           <button 
             onClick={handleSubmit} 
-            disabled={isPending || !inputText.trim()} 
-            style={{ marginLeft: 'auto', padding: '10px 24px', background: '#2b6cb0', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}
+            disabled={isPending || !inputText.trim() || !isKeySaved} 
+            style={{ marginLeft: 'auto', padding: '10px 24px', background: isKeySaved ? '#2b6cb0' : '#94a3b8', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}
           >
             {isPending ? "Scanning..." : "Initiate Scan →"}
           </button>
@@ -330,10 +345,9 @@ export default function App() {
       </div>
 
       {/* --- LIVE RESULTS & REPORT COUNTERS SECTION --- */}
-      {stats.total > 0 && (
+      {stats.total > 0 && isKeySaved && (
         <div style={{ marginTop: '25px', border: '1px solid #e2e8f0', borderRadius: '12px', overflow: 'hidden', background: '#fff', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
           
-          {/* Header Action Row */}
           <div style={{ background: '#f7fafc', padding: '16px 20px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
             <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
               <span style={{ fontWeight: '700', fontSize: '16px', marginRight: '8px' }}>📊 Analysis Summary</span>
@@ -343,7 +357,6 @@ export default function App() {
               <span style={{ background: '#fed7d7', color: '#742a2a', padding: '4px 10px', borderRadius: '6px', fontSize: '13px', fontWeight: '700' }}>Malicious: {stats.malicious}</span>
             </div>
             
-            {/* Export Layout Actions */}
             <div style={{ display: 'flex', gap: '6px' }}>
               <button onClick={exportCsv} style={{ padding: '6px 14px', background: '#edf2f7', border: '1px solid #cbd5e1', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600', color: '#2d3748' }}>📥 Export CSV</button>
               <button onClick={exportJson} style={{ padding: '6px 14px', background: '#edf2f7', border: '1px solid #cbd5e1', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600', color: '#2d3748' }}>📋 Export JSON</button>
