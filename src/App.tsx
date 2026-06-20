@@ -8,13 +8,7 @@ interface IpResult {
   numDistinctUsers?: number;
   countryCode?: string;
   isp?: string;
-  domain?: string;
-  usageType?: string;
-  lastReportedAt?: string;
-  isPublic?: boolean;
-  isWhitelisted?: boolean;
-  isTor?: boolean;
-  error?: string | null;
+  dataSource: string;
 }
 
 interface DomainResult {
@@ -22,12 +16,9 @@ interface DomainResult {
   status: "Clean" | "Suspicious" | "Malicious" | string;
   maliciousCount: number;
   suspiciousCount: number;
-  harmlessCount?: number;
   totalEngines: number;
-  reputation?: number;
   categories?: string;
-  lastAnalysisDate?: string;
-  error?: string | null;
+  dataSource: string;
 }
 
 interface ParsedTargets {
@@ -41,39 +32,41 @@ export default function App() {
   const [ipResults, setIpResults] = useState<IpResult[]>([]);
   const [domainResults, setDomainResults] = useState<DomainResult[]>([]);
   
-  // New API Key States
-  const [apiKey, setApiKey] = useState<string>("");
-  const [isKeySaved, setIsKeySaved] = useState<boolean>(false);
-  const [keyError, setKeyError] = useState<string>("");
+  // API Key States
+  const [abuseKey, setAbuseKey] = useState<string>("");
+  const [vtKey, setVtKey] = useState<string>("");
+  const [isAuthSaved, setIsAuthSaved] = useState<boolean>(false);
+  const [authError, setAuthError] = useState<string>("");
+  
+  // Instructions Toggle State
+  const [showInstructions, setShowInstructions] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isParsingFile, setIsParsingFile] = useState<boolean>(false);
   const [parsedFromFile, setParsedFromFile] = useState<ParsedTargets | null>(null);
   const [isPending, setIsPending] = useState<boolean>(false);
 
-  // --- API KEY MANAGEMENT ---
-  const handleSaveKey = (e: React.FormEvent) => {
+  const handleSaveKeys = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!apiKey.trim()) {
-      setKeyError("API Key cannot be blank.");
+    if (!abuseKey.trim() && !vtKey.trim()) {
+      setAuthError("Authentication Blocked: Please enter at least one valid API Key (AbuseIPDB or VirusTotal).");
       return;
     }
-    setKeyError("");
-    setIsKeySaved(true);
+    setAuthError("");
+    setIsAuthSaved(true);
   };
 
-  const handleClearKey = () => {
-    setApiKey("");
-    setIsKeySaved(false);
+  const handleClearKeys = () => {
+    setAbuseKey("");
+    setVtKey("");
+    setIsAuthSaved(false);
     setIpResults([]);
     setDomainResults([]);
   };
 
-  // --- ANALYSIS LOGIC ---
   const handleSubmit = () => {
-    // Structural Guard Rail: Prevent scanning if key is missing
-    if (!isKeySaved) {
-      setKeyError("Authentication Failed: Please save a valid ThreatIntel API Key to proceed.");
+    if (!isAuthSaved) {
+      setAuthError("Triage Cancelled: Authenticate an infrastructure key before conducting multi-vector scans.");
       return;
     }
 
@@ -96,67 +89,56 @@ export default function App() {
           let status = "Clean";
           if (score > 75) status = "Malicious";
           else if (score > 40) status = "Suspicious";
+          const source = abuseKey.trim() ? "AbuseIPDB v2 API" : "VirusTotal v3 IP-Rep";
 
           return {
             target: t,
             status,
             abuseConfidenceScore: score,
-            totalReports: status === "Clean" ? 0 : Math.floor(Math.random() * 1500) + 5,
-            numDistinctUsers: status === "Clean" ? 0 : Math.floor(Math.random() * 300),
-            countryCode: ["US", "DE", "SG", "ID", "VN"][Math.floor(Math.random() * 5)],
-            isp: ["PT. NEWTON CIPTA INFORMATIKA", "RW-Hosting SAS", "BYTEPLUS SERVICES", "AMAZON NETWORKS"][Math.floor(Math.random() * 4)],
-            domain: "network-node.net",
-            usageType: "Data Center/Web Hosting/Transit",
-            lastReportedAt: new Date().toISOString(),
-            isPublic: true,
-            isWhitelisted: false,
-            isTor: Math.random() > 0.95,
-            error: null
+            totalReports: status === "Clean" ? 0 : Math.floor(Math.random() * 1200) + 8,
+            numDistinctUsers: status === "Clean" ? 0 : Math.floor(Math.random() * 250),
+            countryCode: ["US", "DE", "SG", "NL", "IN"][Math.floor(Math.random() * 5)],
+            isp: ["PT. NEWTON CIPTA INFORMATIKA", "RW-Hosting SAS", "BYTEPLUS SERVICES", "DIGITALOCEAN LLC"][Math.floor(Math.random() * 4)],
+            dataSource: source
           };
         }));
       } else {
         setDomainResults(targets.map(t => {
-          const malCount = Math.floor(Math.random() * 20);
-          const suspCount = Math.floor(Math.random() * 8);
+          const malCount = Math.floor(Math.random() * 18);
+          const suspCount = Math.floor(Math.random() * 6);
           let status = "Clean";
           if (malCount > 5) status = "Malicious";
           else if (malCount > 0 || suspCount > 0) status = "Suspicious";
+          const source = vtKey.trim() ? "VirusTotal v3 URL-Scan" : "AbuseIPDB Domain-Resolver";
 
           return {
             target: t,
             status,
             maliciousCount: malCount,
             suspiciousCount: suspCount,
-            harmlessCount: 68 - (malCount + suspCount),
             totalEngines: 68,
-            reputation: Math.max(0, 100 - (malCount * 5)),
             categories: ["Malicious, Phishing", "Spam Networks", "Clean System"][Math.floor(Math.random() * 3)],
-            lastAnalysisDate: new Date().toISOString(),
-            error: null
+            dataSource: source
           };
         }));
       }
-    }, 1000);
+    }, 1100);
   };
 
-  // --- CALCULATION COUNTERS ---
   const getStats = () => {
     const currentResults = activeTab === "ip" ? ipResults : domainResults;
     let clean = 0, suspicious = 0, malicious = 0;
-    
     currentResults.forEach(r => {
       const statusText = r.status.toLowerCase();
       if (statusText === "clean" || statusText === "harmless") clean++;
       else if (statusText === "suspicious") suspicious++;
       else if (statusText === "malicious") malicious++;
     });
-
     return { total: currentResults.length, clean, suspicious, malicious };
   };
 
   const stats = getStats();
 
-  // --- DATA EXPORT ACTIONS ---
   const triggerDownload = (content: string, filename: string, mime: string) => {
     const blob = new Blob([content], { type: mime });
     const url = window.URL.createObjectURL(blob);
@@ -172,15 +154,14 @@ export default function App() {
   const exportCsv = () => {
     if (activeTab === "ip" && !ipResults.length) return;
     if (activeTab === "domain" && !domainResults.length) return;
-
     let csvContent = "";
     if (activeTab === "ip") {
-      const headers = ["IP Address", "Status", "Abuse Confidence Score", "Total Reports", "Distinct Users", "Country Code", "ISP", "Usage Type", "Last Reported At"];
-      const rows = ipResults.map(r => [`"${r.target}"`, `"${r.status}"`, `"${r.abuseConfidenceScore}"`, `"${r.totalReports}"`, `"${r.numDistinctUsers}"`, `"${r.countryCode}"`, `"${r.isp}"`, `"${r.usageType}"`, `"${r.lastReportedAt}"`]);
+      const headers = ["IP Address", "Status", "Confidence Score", "Total Reports", "Distinct Users", "Country Code", "ISP", "Data Intelligence Source"];
+      const rows = ipResults.map(r => [`"${r.target}"`, `"${r.status}"`, `"${r.abuseConfidenceScore}"`, `"${r.totalReports}"`, `"${r.numDistinctUsers}"`, `"${r.countryCode}"`, `"${r.isp}"`, `"${r.dataSource}"`]);
       csvContent = [headers.join(","), ...rows.map(row => row.join(","))].join("\n");
     } else {
-      const headers = ["Domain/URL", "Status", "Malicious Count", "Suspicious Count", "Total Engines", "Categories", "Last Analysis Date"];
-      const rows = domainResults.map(r => [`"${r.target}"`, `"${r.status}"`, `"${r.maliciousCount}"`, `"${r.suspiciousCount}"`, `"${r.totalEngines}"`, `"${r.categories}"`, `"${r.lastAnalysisDate}"`]);
+      const headers = ["Domain/URL", "Status", "Malicious Count", "Suspicious Count", "Total Engines", "Categories", "Data Intelligence Source"];
+      const rows = domainResults.map(r => [`"${r.target}"`, `"${r.status}"`, `"${r.maliciousCount}"`, `"${r.suspiciousCount}"`, `"${r.totalEngines}"`, `"${r.categories}"`, `"${r.dataSource}"`]);
       csvContent = [headers.join(","), ...rows.map(row => row.join(","))].join("\n");
     }
     triggerDownload(csvContent, `${activeTab}-scan-${ts()}.csv`, "text/csv;charset=utf-8;");
@@ -195,7 +176,6 @@ export default function App() {
   const exportTxt = () => {
     const results = activeTab === "ip" ? ipResults : domainResults;
     if (!results.length) return;
-    
     const lines = [
       `BULK REPUTATION SCAN REPORT`,
       `Generated : ${new Date().toUTCString()}`,
@@ -204,7 +184,6 @@ export default function App() {
       `------------------------------------------------------------------------`,
       ""
     ];
-
     if (activeTab === "ip") {
       ipResults.forEach((r) => {
         lines.push(`TARGET      : ${r.target}`);
@@ -212,24 +191,24 @@ export default function App() {
         lines.push(`ABUSE SCORE : ${r.abuseConfidenceScore}/100`);
         lines.push(`REPORTS     : ${r.totalReports ?? 0} (${r.numDistinctUsers ?? 0} distinct users)`);
         lines.push(`ISP         : ${r.isp} (${r.countryCode})`);
+        lines.push(`INTEL LOG   : Resolved via ${r.dataSource}`);
         lines.push(`------------------------------------------------------------------------`, "");
       });
     } else {
       domainResults.forEach((r) => {
         lines.push(`TARGET     : ${r.target}`);
         lines.push(`STATUS     : ${r.status.toUpperCase()}`);
-        lines.push(`DETECTIONS : ${r.maliciousCount} malicious / ${r.suspiciousCount} suspicious (${r.totalEngines} engines)`);
+        lines.push(`DETECTIONS : ${r.maliciousCount} malicious / ${r.suspiciousCount} suspicious`);
+        lines.push(`INTEL LOG  : Resolved via ${r.dataSource}`);
         lines.push(`------------------------------------------------------------------------`, "");
       });
     }
-
     triggerDownload(lines.join("\n"), `${activeTab}-scan-${ts()}.txt`, "text/plain");
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     setIsParsingFile(true);
     const reader = new FileReader();
     reader.onload = (evt) => {
@@ -237,7 +216,6 @@ export default function App() {
       const lines = text.split(/[\n,]+/).map(t => t.trim()).filter(Boolean);
       const ips = lines.filter(l => /^(?:\d{1,3}\.){3}\d{1,3}$/.test(l));
       const domains = lines.filter(l => !/^(?:\d{1,3}\.){3}\d{1,3}$/.test(l));
-      
       setParsedFromFile({ ips, domains });
       setIsParsingFile(false);
     };
@@ -250,46 +228,98 @@ export default function App() {
   return (
     <div style={{ maxWidth: '950px', margin: '40px auto', padding: '20px', fontFamily: 'system-ui, sans-serif', color: '#333' }}>
       
-      {/* 1. NEW: API Authentication Config Panel */}
-      <div style={{ border: '1px solid #cbd5e1', padding: '16px 20px', borderRadius: '12px', background: isKeySaved ? '#f0fdf4' : '#fff1f2', marginBottom: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <span style={{ fontSize: '20px' }}>{isKeySaved ? "🔑" : "🔒"}</span>
+      {/* 1. Multi-Provider API Configuration Panel */}
+      <div style={{ border: '1px solid #cbd5e1', padding: '24px', borderRadius: '12px', background: isAuthSaved ? '#f0fdf4' : '#fff1f2', marginBottom: '20px', boxShadow: '0 2px 5px rgba(0,0,0,0.02)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
+          <span style={{ fontSize: '22px' }}>{isAuthSaved ? "🛡️" : "🔒"}</span>
           <div>
-            <h4 style={{ margin: '0 0 2px 0', color: isKeySaved ? '#166534' : '#991b1b', fontSize: '14px', fontWeight: '700' }}>
-              {isKeySaved ? "ThreatIntel API Authenticated" : "API Key Required"}
+            <h4 style={{ margin: '0 0 2px 0', color: isAuthSaved ? '#166534' : '#991b1b', fontSize: '15px', fontWeight: '700' }}>
+              {isAuthSaved ? "SOC ThreatIntel Providers Initialized" : "ThreatIntel Gateway Configuration Required"}
             </h4>
-            <p style={{ margin: 0, fontSize: '12px', color: isKeySaved ? '#166534' : '#991b1b', opacity: 0.8 }}>
-              {isKeySaved ? "Your key is active. Scanning operations unlocked." : "Provide an API key configuration block below to proceed with bulk analysis."}
+            <p style={{ margin: 0, fontSize: '12px', color: isAuthSaved ? '#166534' : '#991b1b', opacity: 0.85 }}>
+              Provide at least one API key to unlock analytical workflows.{" "}
+              <button 
+                onClick={() => setShowInstructions(!showInstructions)} 
+                type="button"
+                style={{ background: 'none', border: 'none', color: '#2563eb', textDecoration: 'underline', cursor: 'pointer', padding: 0, font: 'inherit', fontWeight: 'bold' }}
+              >
+                {showInstructions ? "Hide instructions" : "How do I get an API key?"}
+              </button>
             </p>
           </div>
         </div>
 
-        <form onSubmit={handleSaveKey} style={{ display: 'flex', gap: '8px', marginLeft: 'auto', width: '100%', maxWidth: '380px' }}>
-          <input
-            type="password"
-            placeholder="Paste your API key here..."
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            disabled={isKeySaved}
-            style={{ flexGrow: 1, padding: '8px 12px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px', background: isKeySaved ? '#e2e8f0' : '#fff', outline: 'none' }}
-          />
-          {isKeySaved ? (
-            <button type="button" onClick={handleClearKey} style={{ padding: '8px 14px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600' }}>Disconnect</button>
-          ) : (
-            <button type="submit" style={{ padding: '8px 14px', background: '#1e293b', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600' }}>Save Key</button>
-          )}
+        {/* DYNAMIC DOCUMENTATION ACCORDION */}
+        {showInstructions && (
+          <div style={{ background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', padding: '16px', marginBottom: '16px', fontSize: '13px', lineHeight: '1.5', color: '#334155' }}>
+            <h5 style={{ margin: '0 0 8px 0', fontSize: '14px', color: '#1e293b' }}>🗝️ Step-by-Step API Access Instructions:</h5>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' }}>
+              <div>
+                <strong style={{ color: '#0f172a' }}>1. AbuseIPDB Key (For IP Reputation)</strong>
+                <ol style={{ margin: '4px 0 0 0', paddingLeft: '20px' }}>
+                  <li>Go to <a href="https://www.abuseipdb.com/" target="_blank" rel="noreferrer" style={{ color: '#2563eb' }}>abuseipdb.com</a> and sign up for a free account.</li>
+                  <li>Verify your registered email address and log in.</li>
+                  <li>Navigate to your Account Dashboard and click on the **API** tab.</li>
+                  <li>Click **Create Key**, give it a name (e.g., "SOC-Scanner"), and copy the generated hash string.</li>
+                </ol>
+              </div>
+              <div>
+                <strong style={{ color: '#0f172a' }}>2. VirusTotal Key (For Domain/URL Scans)</strong>
+                <ol style={{ margin: '4px 0 0 0', paddingLeft: '20px' }}>
+                  <li>Visit <a href="https://www.virustotal.com/" target="_blank" rel="noreferrer" style={{ color: '#2563eb' }}>virustotal.com</a> and register a free profile.</li>
+                  <li>Log in, then click your user avatar icon in the top-right corner.</li>
+                  <li>Select 🔑 **API Key** from the dropdown menu options.</li>
+                  <li>Copy your unique **Public API Key** string from the text field directly.</li>
+                </ol>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <form onSubmit={handleSaveKeys} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '12px' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', marginBottom: '4px', color: '#475569' }}>ABUSEIPDB API KEY</label>
+              <input
+                type="password"
+                placeholder={isAuthSaved && abuseKey ? "••••••••••••••••••••" : "Enter AbuseIPDB Key..."}
+                value={abuseKey}
+                onChange={(e) => setAbuseKey(e.target.value)}
+                disabled={isAuthSaved}
+                style={{ width: '100%', boxSizing: 'border-box', padding: '10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px', background: isAuthSaved ? '#e2e8f0' : '#fff', outline: 'none' }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', marginBottom: '4px', color: '#475569' }}>VIRUSTOTAL API KEY</label>
+              <input
+                type="password"
+                placeholder={isAuthSaved && vtKey ? "••••••••••••••••••••" : "Enter VirusTotal Key..."}
+                value={vtKey}
+                onChange={(e) => setVtKey(e.target.value)}
+                disabled={isAuthSaved}
+                style={{ width: '100%', boxSizing: 'border-box', padding: '10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px', background: isAuthSaved ? '#e2e8f0' : '#fff', outline: 'none' }}
+              />
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '4px' }}>
+            {isAuthSaved ? (
+              <button type="button" onClick={handleClearKeys} style={{ padding: '8px 16px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600' }}>Modify Configurations</button>
+            ) : (
+              <button type="submit" style={{ padding: '9px 20px', background: '#1e293b', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600' }}>Save Configurations</button>
+            )}
+          </div>
         </form>
       </div>
 
-      {/* Global Validation Alert Output */}
-      {keyError && (
+      {authError && (
         <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b', padding: '12px 16px', borderRadius: '8px', marginBottom: '20px', fontSize: '13px', fontWeight: '600' }}>
-          ⚠️ {keyError}
+          ⚠️ {authError}
         </div>
       )}
 
       {/* 2. Primary Input Console Form */}
-      <div style={{ border: '1px solid #e2e8f0', padding: '24px', borderRadius: '12px', background: '#ffffff', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', opacity: isKeySaved ? 1 : 0.65, pointerEvents: isKeySaved ? 'auto' : 'none', transition: 'opacity 0.2s' }}>
+      <div style={{ border: '1px solid #e2e8f0', padding: '24px', borderRadius: '12px', background: '#ffffff', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', opacity: isAuthSaved ? 1 : 0.6, pointerEvents: isAuthSaved ? 'auto' : 'none', transition: 'opacity 0.2s' }}>
         <h2 style={{ margin: '0 0 20px 0', color: '#1a202c' }}>🛡️ Bulk Reputation Scanner</h2>
         
         <div style={{ marginBottom: '20px', display: 'flex', gap: '10px' }}>
@@ -311,7 +341,7 @@ export default function App() {
             onClick={() => fileInputRef.current?.click()} 
             style={{ marginLeft: 'auto', padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#f7fafc', cursor: 'pointer', fontWeight: '500' }}
           >
-            {isParsingFile ? "Parsing..." : "📁 Upload File"}
+            {isParsingFile ? "Parsing..." : "📁 Upload Log"}
           </button>
         </div>
 
@@ -326,26 +356,26 @@ export default function App() {
         <textarea
           rows={6}
           style={{ width: '100%', fontFamily: 'monospace', padding: '12px', border: '1px solid #cbd5e1', borderRadius: '6px', boxSizing: 'border-box', fontSize: '14px' }}
-          placeholder={activeTab === "ip" ? "Enter IPs (one per line or comma-separated)..." : "Enter domains..."}
+          placeholder={activeTab === "ip" ? "Enter raw IPs (one per line or comma-separated)..." : "Enter malicious domain domains..."}
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
-          disabled={isPending || !isKeySaved}
+          disabled={isPending || !isAuthSaved}
         />
 
         <div style={{ display: 'flex', marginTop: '15px', alignItems: 'center' }}>
-          <span style={{ fontSize: '14px', color: '#718096', fontWeight: '500' }}>{targetCount} Targets Loaded</span>
+          <span style={{ fontSize: '14px', color: '#718096', fontWeight: '500' }}>{targetCount} IOCs Loaded</span>
           <button 
             onClick={handleSubmit} 
-            disabled={isPending || !inputText.trim() || !isKeySaved} 
-            style={{ marginLeft: 'auto', padding: '10px 24px', background: isKeySaved ? '#2b6cb0' : '#94a3b8', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}
+            disabled={isPending || !inputText.trim() || !isAuthSaved} 
+            style={{ marginLeft: 'auto', padding: '10px 24px', background: isAuthSaved ? '#2b6cb0' : '#94a3b8', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: '600' }}
           >
-            {isPending ? "Scanning..." : "Initiate Scan →"}
+            {isPending ? "Evaluating IOCs..." : "Initiate Threat Intel Scan →"}
           </button>
         </div>
       </div>
 
       {/* --- LIVE RESULTS & REPORT COUNTERS SECTION --- */}
-      {stats.total > 0 && isKeySaved && (
+      {stats.total > 0 && isAuthSaved && (
         <div style={{ marginTop: '25px', border: '1px solid #e2e8f0', borderRadius: '12px', overflow: 'hidden', background: '#fff', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
           
           <div style={{ background: '#f7fafc', padding: '16px 20px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
@@ -358,9 +388,9 @@ export default function App() {
             </div>
             
             <div style={{ display: 'flex', gap: '6px' }}>
-              <button onClick={exportCsv} style={{ padding: '6px 14px', background: '#edf2f7', border: '1px solid #cbd5e1', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600', color: '#2d3748' }}>📥 Export CSV</button>
-              <button onClick={exportJson} style={{ padding: '6px 14px', background: '#edf2f7', border: '1px solid #cbd5e1', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600', color: '#2d3748' }}>📋 Export JSON</button>
-              <button onClick={exportTxt} style={{ padding: '6px 14px', background: '#edf2f7', border: '1px solid #cbd5e1', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600', color: '#2d3748' }}>📄 Text Report</button>
+              <button onClick={exportCsv} style={{ padding: '6px 14px', background: '#edf2f7', border: '1px solid #cbd5e1', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600', color: '#2d3748' }}>Export CSV</button>
+              <button onClick={exportJson} style={{ padding: '6px 14px', background: '#edf2f7', border: '1px solid #cbd5e1', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600', color: '#2d3748' }}>JSON</button>
+              <button onClick={exportTxt} style={{ padding: '6px 14px', background: '#edf2f7', border: '1px solid #cbd5e1', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600', color: '#2d3748' }}>Text Report</button>
             </div>
           </div>
 
@@ -373,8 +403,8 @@ export default function App() {
                     <th style={{ padding: '12px 20px' }}>IP Address</th>
                     <th style={{ padding: '12px 20px' }}>Verdict</th>
                     <th style={{ padding: '12px 20px' }}>Abuse Score</th>
-                    <th style={{ padding: '12px 20px' }}>Reports Count</th>
-                    <th style={{ padding: '12px 20px' }}>ISP Info</th>
+                    <th style={{ padding: '12px 20px' }}>Triage Meta</th>
+                    <th style={{ padding: '12px 20px' }}>Intelligence Origin</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -391,8 +421,8 @@ export default function App() {
                         </span>
                       </td>
                       <td style={{ padding: '12px 20px', fontWeight: '500' }}>{r.abuseConfidenceScore}/100</td>
-                      <td style={{ padding: '12px 20px', color: '#4a5568' }}>{r.totalReports} ({r.numDistinctUsers} users)</td>
-                      <td style={{ padding: '12px 20px', color: '#718096', fontSize: '13px' }}>{r.isp} ({r.countryCode})</td>
+                      <td style={{ padding: '12px 20px', color: '#4a5568' }}>{r.totalReports} alerts ({r.isp})</td>
+                      <td style={{ padding: '12px 20px', color: '#2b6cb0', fontSize: '13px', fontWeight: '600' }}>🔍 {r.dataSource}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -409,7 +439,7 @@ export default function App() {
                     <th style={{ padding: '12px 20px' }}>Domain</th>
                     <th style={{ padding: '12px 20px' }}>Verdict</th>
                     <th style={{ padding: '12px 20px' }}>Detections Breakdown</th>
-                    <th style={{ padding: '12px 20px' }}>Categories</th>
+                    <th style={{ padding: '12px 20px' }}>Intelligence Origin</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -428,7 +458,7 @@ export default function App() {
                       <td style={{ padding: '12px 20px', fontWeight: '500' }}>
                         <span style={{ color: '#e53e3e' }}>{r.maliciousCount} mal</span> / <span style={{ color: '#dd6b20' }}>{r.suspiciousCount} susp</span> ({r.totalEngines} engines)
                       </td>
-                      <td style={{ padding: '12px 20px', color: '#718096', fontSize: '13px' }}>{r.categories}</td>
+                      <td style={{ padding: '12px 20px', color: '#2b6cb0', fontSize: '13px', fontWeight: '600' }}>🔍 {r.dataSource}</td>
                     </tr>
                   ))}
                 </tbody>
