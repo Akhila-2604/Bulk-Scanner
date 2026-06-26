@@ -81,7 +81,7 @@ export default function App() {
     };
   };
 
-  // --- THREAT HUNTING RESOLUTION ENGINE (REFACTOR FOR STATIC SERVERS) ---
+  // --- THREAT HUNTING RESOLUTION ENGINE ---
   const handleSubmit = async () => {
     if (!isAuthSaved) {
       setAuthError("Triage Cancelled: Authenticate your integration keys before scanning.");
@@ -107,8 +107,7 @@ export default function App() {
             try {
               if (abuseKey.trim()) {
                 const targetApiUrl = `https://api.abuseipdb.com/api/v2/check?ipAddress=${encodeURIComponent(ip)}&maxAgeInDays=90`;
-                // We use cors.sh proxy which reads standard header passing natively without URL query destruction
-                const proxyUrl = `https://proxy.cors.sh/${targetApiUrl}`;
+                const proxyUrl = `https://api.codetabs.com/v1/proxy?url=${encodeURIComponent(targetApiUrl)}`;
 
                 const response = await fetch(proxyUrl, { 
                   method: "GET",
@@ -118,24 +117,24 @@ export default function App() {
                   }
                 });
 
-                if (!response.ok) throw new Error(`AbuseIPDB responded with HTTP ${response.status}`);
+                if (!response.ok) throw new Error(`AbuseIPDB Error Status: ${response.status}`);
                 
                 const res = await response.json();
-                if (res.errors) throw new Error(res.errors[0].detail || "API Key Verification Failed.");
+                if (res.errors) throw new Error(res.errors[0].detail || "API Authentication Denied.");
 
                 return parseAbuseIpData(ip, res.data);
               } 
               
               if (vtKey.trim()) {
                 const targetUrl = `https://www.virustotal.com/api/v3/ip_addresses/${encodeURIComponent(ip)}`;
-                const proxyUrl = `https://proxy.cors.sh/${targetUrl}`;
+                const proxyUrl = `https://api.codetabs.com/v1/proxy?url=${encodeURIComponent(targetUrl)}`;
 
                 const response = await fetch(proxyUrl, {
                   method: "GET",
                   headers: { "x-apikey": vtKey.trim() },
                 });
 
-                if (!response.ok) throw new Error(`VirusTotal Error Status ${response.status}`);
+                if (!response.ok) throw new Error(`VirusTotal Error Status: ${response.status}`);
                 const res = await response.json();
                 const stats = res.data.attributes.last_analysis_stats;
                 
@@ -189,14 +188,14 @@ export default function App() {
                 targetEndpoint = `https://www.virustotal.com/api/v3/domains/${encodeURIComponent(cleanDomain)}`;
               }
 
-              const proxyUrl = `https://proxy.cors.sh/${targetEndpoint}`;
+              const proxyUrl = `https://api.codetabs.com/v1/proxy?url=${encodeURIComponent(targetEndpoint)}`;
 
               const response = await fetch(proxyUrl, {
                 method: "GET",
                 headers: { "x-apikey": vtKey.trim() },
               });
 
-              if (!response.ok) throw new Error(`VirusTotal Error Status ${response.status}`);
+              if (!response.ok) throw new Error(`VirusTotal Error Status: ${response.status}`);
               const res = await response.json();
               const stats = res.data.attributes.last_analysis_stats;
 
@@ -456,4 +455,70 @@ export default function App() {
             </div>
             <div style={{ display: 'flex', gap: '6px' }}>
               <button onClick={exportCsv} style={{ padding: '6px 14px', background: '#edf2f7', border: '1px solid #cbd5e1', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600', color: '#2d3748' }}>Export CSV</button>
-              <button onClick={exportJson} style={{ padding: '6px 14px', background
+              <button onClick={exportJson} style={{ padding: '6px 14px', background: '#edf2f7', border: '1px solid #cbd5e1', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600', color: '#2d3748' }}>JSON</button>
+              <button onClick={exportTxt} style={{ padding: '6px 14px', background: '#edf2f7', border: '1px solid #cbd5e1', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600', color: '#2d3748' }}>Text Report</button>
+            </div>
+          </div>
+
+          {activeTab === "ip" && (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '14px', minWidth: '600px' }}>
+                <thead>
+                  <tr style={{ background: '#edf2f7', borderBottom: '1px solid #e2e8f0', color: '#4a5568' }}>
+                    <th style={{ padding: '12px 20px' }}>IP Address</th>
+                    <th style={{ padding: '12px 20px' }}>Verdict</th>
+                    <th style={{ padding: '12px 20px' }}>Abuse Score</th>
+                    <th style={{ padding: '12px 20px' }}>Triage Meta</th>
+                    <th style={{ padding: '12px 20px' }}>Intelligence Origin</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ipResults.map((r, i) => (
+                    <tr key={i} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                      <td style={{ padding: '12px 20px', fontFamily: 'monospace', fontWeight: '600' }}>{r.target}</td>
+                      <td style={{ padding: '12px 20px' }}>
+                        <span style={{ background: r.status === "Clean" ? "#c6f6d5" : r.status === "Suspicious" ? "#feebc8" : r.status === "Error" ? "#cbd5e1" : "#fed7d7", color: r.status === "Clean" ? "#22543d" : r.status === "Suspicious" ? "#744210" : r.status === "Error" ? "#334155" : "#742a2a", padding: '4px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 'bold' }}>{r.status}</span>
+                      </td>
+                      <td style={{ padding: '12px 20px', fontWeight: '500' }}>{r.status === "Error" ? "N/A" : `${r.abuseConfidenceScore}/100`}</td>
+                      <td style={{ padding: '12px 20px', color: '#4a5568' }}>{r.status === "Error" ? r.errorDetails : `${r.totalReports} reports (${r.isp})`}</td>
+                      <td style={{ padding: '12px 20px', color: r.status === "Error" ? "#ef4444" : '#2b6cb0', fontSize: '13px', fontWeight: '600' }}>{r.status === "Error" ? "❌ Fault Trace" : `🔍 ${r.dataSource}`}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {activeTab === "domain" && (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '14px', minWidth: '600px' }}>
+                <thead>
+                  <tr style={{ background: '#edf2f7', borderBottom: '1px solid #e2e8f0', color: '#4a5568' }}>
+                    <th style={{ padding: '12px 20px' }}>Domain / URL</th>
+                    <th style={{ padding: '12px 20px' }}>Verdict</th>
+                    <th style={{ padding: '12px 20px' }}>Detections Breakdown</th>
+                    <th style={{ padding: '12px 20px' }}>Intelligence Origin</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {domainResults.map((r, i) => (
+                    <tr key={i} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                      <td style={{ padding: '12px 20px', fontFamily: 'monospace', fontWeight: '600', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.target}>{r.target}</td>
+                      <td style={{ padding: '12px 20px' }}>
+                        <span style={{ background: r.status === "Clean" ? "#c6f6d5" : r.status === "Suspicious" ? "#feebc8" : r.status === "Error" ? "#cbd5e1" : "#fed7d7", color: r.status === "Clean" ? "#22543d" : r.status === "Suspicious" ? "#744210" : r.status === "Error" ? "#334155" : "#742a2a", padding: '4px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 'bold' }}>{r.status}</span>
+                      </td>
+                      <td style={{ padding: '12px 20px', fontWeight: '500' }}>
+                        {r.status === "Error" ? <span style={{ color: '#475569' }}>{r.errorDetails}</span> : (<><span style={{ color: '#e53e3e' }}>{r.maliciousCount} mal</span> / <span style={{ color: '#dd6b20' }}>{r.suspiciousCount} susp</span> ({r.totalEngines} engines)</>)}
+                      </td>
+                      <td style={{ padding: '12px 20px', color: r.status === "Error" ? "#ef4444" : '#2b6cb0', fontSize: '13px', fontWeight: '600' }}>{r.status === "Error" ? "❌ Fault Trace" : `🔍 ${r.dataSource}`}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
