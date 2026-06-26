@@ -64,7 +64,7 @@ export default function App() {
     setDomainResults([]);
   };
 
-  // --- THREAT HUNTING RESOLUTION ENGINE (STATIC INFRASTRUCTURE ENHANCED) ---
+  // --- THREAT HUNTING RESOLUTION ENGINE (CORS-COMPATIBLE PRO) ---
   const handleSubmit = async () => {
     if (!isAuthSaved) {
       setAuthError("Triage Cancelled: Authenticate your integration keys before scanning.");
@@ -88,12 +88,13 @@ export default function App() {
         const results = await Promise.all(
           targets.map(async (ip): Promise<IpResult> => {
             try {
-              // 1. Prioritize AbuseIPDB via CORS Utility Bypass
+              // 1. AbuseIPDB Verification via Edge Proxy Pipeline
               if (abuseKey.trim()) {
                 const targetApiUrl = `https://api.abuseipdb.com/api/v2/check?ipAddress=${encodeURIComponent(ip)}&maxAgeInDays=90`;
-                const wrappedProxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetApiUrl)}`;
+                // Prepends the edge proxy to dynamically bypass static origin context constraints
+                const proxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(targetApiUrl)}`;
 
-                const response = await fetch(wrappedProxyUrl, {
+                const response = await fetch(proxyUrl, {
                   method: "GET",
                   headers: {
                     "Key": abuseKey.trim(),
@@ -101,18 +102,11 @@ export default function App() {
                   }
                 });
 
-                if (!response.ok) throw new Error(`Proxy Node responded with Status ${response.status}`);
+                if (!response.ok) throw new Error(`AbuseIPDB responded with HTTP ${response.status}`);
                 
-                const wrappedData = await response.json();
-                if (!wrappedData.contents) throw new Error("Empty endpoint contents received.");
-                
-                const res = JSON.parse(wrappedData.contents);
-                
-                if (res.errors) {
-                  throw new Error(res.errors[0].detail || "Authorization Denied by AbuseIPDB.");
-                }
-
+                const res = await response.json();
                 const data = res.data;
+                
                 let verdict: "Clean" | "Suspicious" | "Malicious" = "Clean";
                 if (data.abuseConfidenceScore > 75) verdict = "Malicious";
                 else if (data.abuseConfidenceScore > 25) verdict = "Suspicious";
@@ -129,10 +123,12 @@ export default function App() {
                 };
               } 
               
-              // 2. Direct Core Client Connection for VirusTotal IP
+              // 2. Fallback direct connection for VirusTotal IP
               if (vtKey.trim()) {
                 const targetUrl = `https://www.virustotal.com/api/v3/ip_addresses/${encodeURIComponent(ip)}`;
-                const response = await fetch(targetUrl, {
+                const proxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`;
+
+                const response = await fetch(proxyUrl, {
                   method: "GET",
                   headers: { "x-apikey": vtKey.trim() },
                 });
@@ -157,7 +153,7 @@ export default function App() {
                 };
               }
 
-              throw new Error("Missing required credentials for IP verification.");
+              throw new Error("Credentials missing.");
             } catch (err: any) {
               return {
                 target: ip,
@@ -168,31 +164,33 @@ export default function App() {
                 countryCode: "N/A",
                 isp: "Scan Unresolved",
                 dataSource: "Fault Diagnostics",
-                errorDetails: err.message || "Network Error"
+                errorDetails: err.message || "Connection Interrupted"
               };
             }
           })
         );
         setIpResults(results);
       } else {
-        // Domain and URL Intelligence Engine (VirusTotal Native Client Connection)
+        // Domain and URL Engine (VirusTotal Edge Proxy Routing Setup)
         const results = await Promise.all(
           targets.map(async (inputItem): Promise<DomainResult> => {
             try {
-              if (!vtKey.trim()) throw new Error("VirusTotal Key is required for Domain/URL scanning.");
+              if (!vtKey.trim()) throw new Error("VirusTotal Key required.");
               
               const isUrl = inputItem.startsWith("http://") || inputItem.startsWith("https://");
-              let endpoint = "";
+              let targetEndpoint = "";
 
               if (isUrl) {
                 const b64Url = btoa(inputItem).replace(/=/g, "");
-                endpoint = `https://www.virustotal.com/api/v3/urls/${b64Url}`;
+                targetEndpoint = `https://www.virustotal.com/api/v3/urls/${b64Url}`;
               } else {
                 const cleanDomain = inputItem.replace(/^(https?:\/\/)?(www\.)?/, "").split("/")[0];
-                endpoint = `https://www.virustotal.com/api/v3/domains/${encodeURIComponent(cleanDomain)}`;
+                targetEndpoint = `https://www.virustotal.com/api/v3/domains/${encodeURIComponent(cleanDomain)}`;
               }
 
-              const response = await fetch(endpoint, {
+              const proxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(targetEndpoint)}`;
+
+              const response = await fetch(proxyUrl, {
                 method: "GET",
                 headers: { "x-apikey": vtKey.trim() },
               });
@@ -223,7 +221,7 @@ export default function App() {
                 totalEngines: 0,
                 categories: "Resolution Failed",
                 dataSource: "Fault Diagnostics",
-                errorDetails: err.message || "Network Error"
+                errorDetails: err.message || "Connection Interrupted"
               };
             }
           })
@@ -288,8 +286,8 @@ export default function App() {
   };
 
   const exportTxt = () => {
-    const results = activeTab === "ip" ? ipResults : domainResults;
-    if (!results.length) return;
+    const NavResults = activeTab === "ip" ? ipResults : domainResults;
+    if (!NavResults.length) return;
     const lines = [
       `BULK REPUTATION SCAN REPORT`,
       `Generated : ${new Date().toUTCString()}`,
