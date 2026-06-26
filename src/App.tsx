@@ -28,9 +28,6 @@ interface ParsedTargets {
   domains: string[];
 }
 
-// CORS Proxy to allow client-side requests to third-party security APIs
-const CORS_PROXY = "https://cors-anywhere.herokuapp.com/";
-
 export default function App() {
   const [activeTab, setActiveTab] = useState<"ip" | "domain">("ip");
   const [inputText, setInputText] = useState<string>("");
@@ -67,7 +64,7 @@ export default function App() {
     setDomainResults([]);
   };
 
-  // --- THREAT HUNTING RESOLUTION ENGINE ---
+  // --- THREAT HUNTING RESOLUTION ENGINE (GITHUB PAGES NATIVE) ---
   const handleSubmit = async () => {
     if (!isAuthSaved) {
       setAuthError("Triage Cancelled: Authenticate your integration keys before scanning.");
@@ -91,9 +88,9 @@ export default function App() {
         const results = await Promise.all(
           targets.map(async (ip): Promise<IpResult> => {
             try {
-              // 1. Prioritize AbuseIPDB if available
+              // 1. Prioritize AbuseIPDB if key is available
               if (abuseKey.trim()) {
-                const targetUrl = `${CORS_PROXY}https://api.abuseipdb.com/api/v2/check?ipAddress=${encodeURIComponent(ip)}&maxAgeInDays=90`;
+                const targetUrl = `https://api.abuseipdb.com/api/v2/check?ipAddress=${encodeURIComponent(ip)}&maxAgeInDays=90`;
                 const response = await fetch(targetUrl, {
                   method: "GET",
                   headers: {
@@ -102,7 +99,13 @@ export default function App() {
                   },
                 });
 
-                if (!response.ok) throw new Error(`AbuseIPDB responded with HTTP ${response.status}`);
+                if (!response.ok) {
+                  if (response.status === 403) {
+                    throw new Error("403 Forbidden: Check key validity or rate limits.");
+                  }
+                  throw new Error(`AbuseIPDB HTTP Error ${response.status}`);
+                }
+                
                 const res = await response.json();
                 const data = res.data;
 
@@ -124,13 +127,13 @@ export default function App() {
               
               // 2. Fall back to VirusTotal for IP checks if no AbuseIPDB key is provided
               if (vtKey.trim()) {
-                const targetUrl = `${CORS_PROXY}https://www.virustotal.com/api/v3/ip_addresses/${encodeURIComponent(ip)}`;
+                const targetUrl = `https://www.virustotal.com/api/v3/ip_addresses/${encodeURIComponent(ip)}`;
                 const response = await fetch(targetUrl, {
                   method: "GET",
                   headers: { "x-apikey": vtKey.trim() },
                 });
 
-                if (!response.ok) throw new Error(`VirusTotal responded with HTTP ${response.status}`);
+                if (!response.ok) throw new Error(`VirusTotal HTTP Error ${response.status}`);
                 const res = await response.json();
                 const stats = res.data.attributes.last_analysis_stats;
                 
@@ -150,7 +153,7 @@ export default function App() {
                 };
               }
 
-              throw new Error("Missing required credentials for IP verification.");
+              throw new Error("Missing credentials for IP verification.");
             } catch (err: any) {
               return {
                 target: ip,
@@ -161,7 +164,7 @@ export default function App() {
                 countryCode: "N/A",
                 isp: "Scan Unresolved",
                 dataSource: "Error Diagnostics",
-                errorDetails: err.message || "Network Error"
+                errorDetails: err.message || "Network Fault"
               };
             }
           })
@@ -172,27 +175,26 @@ export default function App() {
         const results = await Promise.all(
           targets.map(async (inputItem): Promise<DomainResult> => {
             try {
-              if (!vtKey.trim()) throw new Error("VirusTotal Key is required for Domain/URL scanning.");
+              if (!vtKey.trim()) throw new Error("VirusTotal API Key required.");
               
               const isUrl = inputItem.startsWith("http://") || inputItem.startsWith("https://");
               let endpoint = "";
 
               if (isUrl) {
-                // To scan URLs with VirusTotal, the URL string must be base64 encoded without padding
+                // VirusTotal URL tracking schema requires Base64 format without padding symbols
                 const b64Url = btoa(inputItem).replace(/=/g, "");
                 endpoint = `https://www.virustotal.com/api/v3/urls/${b64Url}`;
               } else {
-                // Pure Domain evaluation
                 const cleanDomain = inputItem.replace(/^(https?:\/\/)?(www\.)?/, "").split("/")[0];
                 endpoint = `https://www.virustotal.com/api/v3/domains/${encodeURIComponent(cleanDomain)}`;
               }
 
-              const response = await fetch(`${CORS_PROXY}${endpoint}`, {
+              const response = await fetch(endpoint, {
                 method: "GET",
                 headers: { "x-apikey": vtKey.trim() },
               });
 
-              if (!response.ok) throw new Error(`VirusTotal responded with HTTP ${response.status}`);
+              if (!response.ok) throw new Error(`VirusTotal HTTP Error ${response.status}`);
               const res = await response.json();
               const stats = res.data.attributes.last_analysis_stats;
 
@@ -218,7 +220,7 @@ export default function App() {
                 totalEngines: 0,
                 categories: "Resolution Failed",
                 dataSource: "Error Diagnostics",
-                errorDetails: err.message || "Network Error"
+                errorDetails: err.message || "Network Fault"
               };
             }
           })
@@ -247,7 +249,7 @@ export default function App() {
 
   const stats = getStats();
 
-  // --- EXPORT ACTIONS ---
+  // --- EXPORT DOWNLOAD ACTIONS ---
   const triggerDownload = (content: string, filename: string, mime: string) => {
     const blob = new Blob([content], { type: mime });
     const url = window.URL.createObjectURL(blob);
@@ -384,9 +386,6 @@ export default function App() {
                 </ol>
               </div>
             </div>
-            <p style={{ marginTop: '12px', marginBottom: 0, fontSize: '12px', color: '#64748b', fontWeight: 'bold' }}>
-              ⚠️ Note: This app routes through a temporary cors proxy for client-side functionality. Ensure you allow proxy traffic if requested by your browser.
-            </p>
           </div>
         )}
 
