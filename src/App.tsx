@@ -64,7 +64,7 @@ export default function App() {
     setDomainResults([]);
   };
 
-  // --- THREAT HUNTING RESOLUTION ENGINE (GITHUB PAGES NATIVE) ---
+  // --- THREAT HUNTING RESOLUTION ENGINE (STATIC INFRASTRUCTURE ENHANCED) ---
   const handleSubmit = async () => {
     if (!isAuthSaved) {
       setAuthError("Triage Cancelled: Authenticate your integration keys before scanning.");
@@ -88,27 +88,31 @@ export default function App() {
         const results = await Promise.all(
           targets.map(async (ip): Promise<IpResult> => {
             try {
-              // 1. Prioritize AbuseIPDB if key is available
+              // 1. Prioritize AbuseIPDB via CORS Utility Bypass
               if (abuseKey.trim()) {
-                const targetUrl = `https://api.abuseipdb.com/api/v2/check?ipAddress=${encodeURIComponent(ip)}&maxAgeInDays=90`;
-                const response = await fetch(targetUrl, {
+                const targetApiUrl = `https://api.abuseipdb.com/api/v2/check?ipAddress=${encodeURIComponent(ip)}&maxAgeInDays=90`;
+                const wrappedProxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetApiUrl)}`;
+
+                const response = await fetch(wrappedProxyUrl, {
                   method: "GET",
                   headers: {
                     "Key": abuseKey.trim(),
-                    "Accept": "application/json",
-                  },
+                    "Accept": "application/json"
+                  }
                 });
 
-                if (!response.ok) {
-                  if (response.status === 403) {
-                    throw new Error("403 Forbidden: Check key validity or rate limits.");
-                  }
-                  throw new Error(`AbuseIPDB HTTP Error ${response.status}`);
-                }
+                if (!response.ok) throw new Error(`Proxy Node responded with Status ${response.status}`);
                 
-                const res = await response.json();
-                const data = res.data;
+                const wrappedData = await response.json();
+                if (!wrappedData.contents) throw new Error("Empty endpoint contents received.");
+                
+                const res = JSON.parse(wrappedData.contents);
+                
+                if (res.errors) {
+                  throw new Error(res.errors[0].detail || "Authorization Denied by AbuseIPDB.");
+                }
 
+                const data = res.data;
                 let verdict: "Clean" | "Suspicious" | "Malicious" = "Clean";
                 if (data.abuseConfidenceScore > 75) verdict = "Malicious";
                 else if (data.abuseConfidenceScore > 25) verdict = "Suspicious";
@@ -121,11 +125,11 @@ export default function App() {
                   numDistinctUsers: data.numDistinctUsers || 0,
                   countryCode: data.countryCode || "Global",
                   isp: data.isp || "Unknown Provider",
-                  dataSource: "AbuseIPDB Intelligence Core",
+                  dataSource: "AbuseIPDB Core Feed",
                 };
               } 
               
-              // 2. Fall back to VirusTotal for IP checks if no AbuseIPDB key is provided
+              // 2. Direct Core Client Connection for VirusTotal IP
               if (vtKey.trim()) {
                 const targetUrl = `https://www.virustotal.com/api/v3/ip_addresses/${encodeURIComponent(ip)}`;
                 const response = await fetch(targetUrl, {
@@ -133,7 +137,7 @@ export default function App() {
                   headers: { "x-apikey": vtKey.trim() },
                 });
 
-                if (!response.ok) throw new Error(`VirusTotal HTTP Error ${response.status}`);
+                if (!response.ok) throw new Error(`VirusTotal responded with HTTP ${response.status}`);
                 const res = await response.json();
                 const stats = res.data.attributes.last_analysis_stats;
                 
@@ -149,11 +153,11 @@ export default function App() {
                   numDistinctUsers: stats.malicious || 0,
                   countryCode: res.data.attributes.country || "Global",
                   isp: res.data.attributes.as_owner || "Unknown Network",
-                  dataSource: "VirusTotal IP Engine",
+                  dataSource: "VirusTotal IP Feed",
                 };
               }
 
-              throw new Error("Missing credentials for IP verification.");
+              throw new Error("Missing required credentials for IP verification.");
             } catch (err: any) {
               return {
                 target: ip,
@@ -163,25 +167,24 @@ export default function App() {
                 numDistinctUsers: 0,
                 countryCode: "N/A",
                 isp: "Scan Unresolved",
-                dataSource: "Error Diagnostics",
-                errorDetails: err.message || "Network Fault"
+                dataSource: "Fault Diagnostics",
+                errorDetails: err.message || "Network Error"
               };
             }
           })
         );
         setIpResults(results);
       } else {
-        // Domain and URL Intelligence Engine (VirusTotal Exclusively)
+        // Domain and URL Intelligence Engine (VirusTotal Native Client Connection)
         const results = await Promise.all(
           targets.map(async (inputItem): Promise<DomainResult> => {
             try {
-              if (!vtKey.trim()) throw new Error("VirusTotal API Key required.");
+              if (!vtKey.trim()) throw new Error("VirusTotal Key is required for Domain/URL scanning.");
               
               const isUrl = inputItem.startsWith("http://") || inputItem.startsWith("https://");
               let endpoint = "";
 
               if (isUrl) {
-                // VirusTotal URL tracking schema requires Base64 format without padding symbols
                 const b64Url = btoa(inputItem).replace(/=/g, "");
                 endpoint = `https://www.virustotal.com/api/v3/urls/${b64Url}`;
               } else {
@@ -194,7 +197,7 @@ export default function App() {
                 headers: { "x-apikey": vtKey.trim() },
               });
 
-              if (!response.ok) throw new Error(`VirusTotal HTTP Error ${response.status}`);
+              if (!response.ok) throw new Error(`VirusTotal responded with HTTP ${response.status}`);
               const res = await response.json();
               const stats = res.data.attributes.last_analysis_stats;
 
@@ -219,8 +222,8 @@ export default function App() {
                 suspiciousCount: 0,
                 totalEngines: 0,
                 categories: "Resolution Failed",
-                dataSource: "Error Diagnostics",
-                errorDetails: err.message || "Network Fault"
+                dataSource: "Fault Diagnostics",
+                errorDetails: err.message || "Network Error"
               };
             }
           })
@@ -267,11 +270,11 @@ export default function App() {
     if (activeTab === "domain" && !domainResults.length) return;
     let csvContent = "";
     if (activeTab === "ip") {
-      const headers = ["IP Address", "Status", "Confidence Score", "Total Reports", "Distinct Users", "Country Code", "ISP", "Source/Error"];
+      const headers = ["IP Address", "Status", "Confidence Score", "Total Reports", "Distinct Users", "Country Code", "ISP", "Data Intelligence Source"];
       const rows = ipResults.map(r => [`"${r.target}"`, `"${r.status}"`, `"${r.abuseConfidenceScore}"`, `"${r.totalReports}"`, `"${r.numDistinctUsers}"`, `"${r.countryCode}"`, `"${r.isp}"`, `"${r.status === "Error" ? r.errorDetails : r.dataSource}"`]);
       csvContent = [headers.join(","), ...rows.map(row => row.join(","))].join("\n");
     } else {
-      const headers = ["Domain/URL", "Status", "Malicious Count", "Suspicious Count", "Total Engines", "Categories", "Source/Error"];
+      const headers = ["Domain/URL", "Status", "Malicious Count", "Suspicious Count", "Total Engines", "Categories", "Data Intelligence Source"];
       const rows = domainResults.map(r => [`"${r.target}"`, `"${r.status}"`, `"${r.maliciousCount}"`, `"${r.suspiciousCount}"`, `"${r.totalEngines}"`, `"${r.categories}"`, `"${r.status === "Error" ? r.errorDetails : r.dataSource}"`]);
       csvContent = [headers.join(","), ...rows.map(row => row.join(","))].join("\n");
     }
@@ -291,7 +294,7 @@ export default function App() {
       `BULK REPUTATION SCAN REPORT`,
       `Generated : ${new Date().toUTCString()}`,
       `Scan Type : ${activeTab.toUpperCase()}`,
-      `Summary   : Total: ${stats.total} | Clean: ${stats.clean} | Suspicious: ${stats.suspicious} | Malicious: ${stats.malicious} | Failures: ${stats.error}`,
+      `Summary   : Total: ${stats.total} | Clean: ${stats.clean} | Suspicious: ${stats.suspicious} | Malicious: ${stats.malicious} | Failed: ${stats.error}`,
       `------------------------------------------------------------------------`,
       ""
     ];
@@ -300,7 +303,7 @@ export default function App() {
         lines.push(`TARGET      : ${r.target}`);
         lines.push(`STATUS      : ${r.status.toUpperCase()}`);
         if (r.status === "Error") {
-          lines.push(`ERROR TRACE : ${r.errorDetails}`);
+          lines.push(`ERROR LOG   : ${r.errorDetails}`);
         } else {
           lines.push(`ABUSE SCORE : ${r.abuseConfidenceScore}/100`);
           lines.push(`REPORTS     : ${r.totalReports ?? 0} (${r.numDistinctUsers ?? 0} distinct users)`);
@@ -314,10 +317,9 @@ export default function App() {
         lines.push(`TARGET     : ${r.target}`);
         lines.push(`STATUS     : ${r.status.toUpperCase()}`);
         if (r.status === "Error") {
-          lines.push(`ERROR TRACE: ${r.errorDetails}`);
+          lines.push(`ERROR LOG  : ${r.errorDetails}`);
         } else {
           lines.push(`DETECTIONS : ${r.maliciousCount} malicious / ${r.suspiciousCount} suspicious`);
-          lines.push(`CATEGORIES : ${r.categories}`);
           lines.push(`INTEL LOG  : Resolved via ${r.dataSource}`);
         }
         lines.push(`------------------------------------------------------------------------`, "");
