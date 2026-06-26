@@ -2,29 +2,34 @@ import React, { useRef, useState } from "react";
 
 interface IpResult {
   target: string;
-  status: "Clean" | "Suspicious" | "Malicious" | string;
+  status: "Clean" | "Suspicious" | "Malicious" | "Error";
   abuseConfidenceScore: number;
   totalReports: number;
   numDistinctUsers: number;
   countryCode: string;
   isp: string;
   dataSource: string;
+  errorDetails?: string;
 }
 
 interface DomainResult {
   target: string;
-  status: "Clean" | "Suspicious" | "Malicious" | string;
+  status: "Clean" | "Suspicious" | "Malicious" | "Error";
   maliciousCount: number;
   suspiciousCount: number;
   totalEngines: number;
   categories: string;
   dataSource: string;
+  errorDetails?: string;
 }
 
 interface ParsedTargets {
   ips: string[];
   domains: string[];
 }
+
+// CORS Proxy to allow client-side requests to third-party security APIs
+const CORS_PROXY = "https://cors-anywhere.herokuapp.com/";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<"ip" | "domain">("ip");
@@ -62,7 +67,7 @@ export default function App() {
     setDomainResults([]);
   };
 
-  // --- CLEAN ASYNCHRONOUS API THREAT HUNTING ENGINE ---
+  // --- THREAT HUNTING RESOLUTION ENGINE ---
   const handleSubmit = async () => {
     if (!isAuthSaved) {
       setAuthError("Triage Cancelled: Authenticate your integration keys before scanning.");
@@ -84,27 +89,24 @@ export default function App() {
     try {
       if (activeTab === "ip") {
         const results = await Promise.all(
-          targets.map(async (ip) => {
+          targets.map(async (ip): Promise<IpResult> => {
             try {
+              // 1. Prioritize AbuseIPDB if available
               if (abuseKey.trim()) {
-                // REAL LIVE QUERY: AbuseIPDB Endpoint
-                const response = await fetch(
-                  `https://api.abuseipdb.com/api/v2/check?ipAddress=${encodeURIComponent(ip)}&maxAgeInDays=90`,
-                  {
-                    method: "GET",
-                    mode: "cors", // Forces modern browser security compatibility
-                    headers: {
-                      "Key": abuseKey.trim(),
-                      "Accept": "application/json",
-                    },
-                  }
-                );
+                const targetUrl = `${CORS_PROXY}https://api.abuseipdb.com/api/v2/check?ipAddress=${encodeURIComponent(ip)}&maxAgeInDays=90`;
+                const response = await fetch(targetUrl, {
+                  method: "GET",
+                  headers: {
+                    "Key": abuseKey.trim(),
+                    "Accept": "application/json",
+                  },
+                });
 
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                if (!response.ok) throw new Error(`AbuseIPDB responded with HTTP ${response.status}`);
                 const res = await response.json();
                 const data = res.data;
 
-                let verdict = "Clean";
+                let verdict: "Clean" | "Suspicious" | "Malicious" = "Clean";
                 if (data.abuseConfidenceScore > 75) verdict = "Malicious";
                 else if (data.abuseConfidenceScore > 25) verdict = "Suspicious";
 
@@ -116,24 +118,23 @@ export default function App() {
                   numDistinctUsers: data.numDistinctUsers || 0,
                   countryCode: data.countryCode || "Global",
                   isp: data.isp || "Unknown Provider",
-                  dataSource: "AbuseIPDB Core Feed",
+                  dataSource: "AbuseIPDB Intelligence Core",
                 };
-              } else {
-                // REAL LIVE QUERY: VirusTotal IP Engine Fallback
-                const response = await fetch(
-                  `https://www.virustotal.com/api/v3/ip_addresses/${encodeURIComponent(ip)}`,
-                  {
-                    method: "GET",
-                    mode: "cors",
-                    headers: { "x-apikey": vtKey.trim() },
-                  }
-                );
+              } 
+              
+              // 2. Fall back to VirusTotal for IP checks if no AbuseIPDB key is provided
+              if (vtKey.trim()) {
+                const targetUrl = `${CORS_PROXY}https://www.virustotal.com/api/v3/ip_addresses/${encodeURIComponent(ip)}`;
+                const response = await fetch(targetUrl, {
+                  method: "GET",
+                  headers: { "x-apikey": vtKey.trim() },
+                });
 
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                if (!response.ok) throw new Error(`VirusTotal responded with HTTP ${response.status}`);
                 const res = await response.json();
                 const stats = res.data.attributes.last_analysis_stats;
                 
-                let verdict = "Clean";
+                let verdict: "Clean" | "Suspicious" | "Malicious" = "Clean";
                 if (stats.malicious > 5) verdict = "Malicious";
                 else if (stats.malicious > 0) verdict = "Suspicious";
 
@@ -145,53 +146,79 @@ export default function App() {
                   numDistinctUsers: stats.malicious || 0,
                   countryCode: res.data.attributes.country || "Global",
                   isp: res.data.attributes.as_owner || "Unknown Network",
-                  dataSource: "VirusTotal IP Feed",
+                  dataSource: "VirusTotal IP Engine",
                 };
               }
-            } catch (err) {
+
+              throw new Error("Missing required credentials for IP verification.");
+            } catch (err: any) {
               return {
-                target: ip, status: "Clean", abuseConfidenceScore: 0, totalReports: 0, numDistinctUsers: 0, countryCode: "US", isp: "Cloud Infrastructure Node", dataSource: "ThreatIntel Database Backup"
+                target: ip,
+                status: "Error",
+                abuseConfidenceScore: 0,
+                totalReports: 0,
+                numDistinctUsers: 0,
+                countryCode: "N/A",
+                isp: "Scan Unresolved",
+                dataSource: "Error Diagnostics",
+                errorDetails: err.message || "Network Error"
               };
             }
           })
         );
         setIpResults(results);
       } else {
+        // Domain and URL Intelligence Engine (VirusTotal Exclusively)
         const results = await Promise.all(
-          targets.map(async (domain) => {
+          targets.map(async (inputItem): Promise<DomainResult> => {
             try {
-              const cleanDomain = domain.replace(/^(https?:\/\/)?(www\.)?/, "").split("/")[0];
+              if (!vtKey.trim()) throw new Error("VirusTotal Key is required for Domain/URL scanning.");
               
-              // REAL LIVE QUERY: VirusTotal Domain Analyzer
-              const response = await fetch(
-                `https://www.virustotal.com/api/v3/domains/${encodeURIComponent(cleanDomain)}`,
-                {
-                  method: "GET",
-                  mode: "cors",
-                  headers: { "x-apikey": vtKey.trim() },
-                }
-              );
+              const isUrl = inputItem.startsWith("http://") || inputItem.startsWith("https://");
+              let endpoint = "";
 
-              if (!response.ok) throw new Error(`HTTP ${response.status}`);
+              if (isUrl) {
+                // To scan URLs with VirusTotal, the URL string must be base64 encoded without padding
+                const b64Url = btoa(inputItem).replace(/=/g, "");
+                endpoint = `https://www.virustotal.com/api/v3/urls/${b64Url}`;
+              } else {
+                // Pure Domain evaluation
+                const cleanDomain = inputItem.replace(/^(https?:\/\/)?(www\.)?/, "").split("/")[0];
+                endpoint = `https://www.virustotal.com/api/v3/domains/${encodeURIComponent(cleanDomain)}`;
+              }
+
+              const response = await fetch(`${CORS_PROXY}${endpoint}`, {
+                method: "GET",
+                headers: { "x-apikey": vtKey.trim() },
+              });
+
+              if (!response.ok) throw new Error(`VirusTotal responded with HTTP ${response.status}`);
               const res = await response.json();
               const stats = res.data.attributes.last_analysis_stats;
 
-              let verdict = "Clean";
+              let verdict: "Clean" | "Suspicious" | "Malicious" = "Clean";
               if (stats.malicious > 5) verdict = "Malicious";
               else if (stats.malicious > 0) verdict = "Suspicious";
 
               return {
-                target: cleanDomain,
+                target: inputItem,
                 status: verdict,
                 maliciousCount: stats.malicious || 0,
                 suspiciousCount: stats.suspicious || 0,
-                totalEngines: 68,
-                categories: "Enterprise Network Infrastructure",
-                dataSource: "VirusTotal System",
+                totalEngines: (stats.malicious || 0) + (stats.suspicious || 0) + (stats.harmless || 0) + (stats.undetected || 0),
+                categories: res.data.attributes.categories ? Object.values(res.data.attributes.categories).join(", ") : "Uncategorized Infrastructure",
+                dataSource: isUrl ? "VirusTotal URL System" : "VirusTotal Domain System",
               };
-            } catch (err) {
+            } catch (err: any) {
               return {
-                target: domain, status: "Clean", maliciousCount: 0, suspiciousCount: 0, totalEngines: 68, categories: "Content Delivery Network", dataSource: "ThreatIntel Database Backup"
+                target: inputItem,
+                status: "Error",
+                maliciousCount: 0,
+                suspiciousCount: 0,
+                totalEngines: 0,
+                categories: "Resolution Failed",
+                dataSource: "Error Diagnostics",
+                errorDetails: err.message || "Network Error"
               };
             }
           })
@@ -208,18 +235,19 @@ export default function App() {
   // --- STATS SYSTEM ---
   const getStats = () => {
     const currentResults = activeTab === "ip" ? ipResults : domainResults;
-    let clean = 0, suspicious = 0, malicious = 0;
+    let clean = 0, suspicious = 0, malicious = 0, error = 0;
     currentResults.forEach(r => {
       if (r.status === "Clean") clean++;
       else if (r.status === "Suspicious") suspicious++;
       else if (r.status === "Malicious") malicious++;
+      else if (r.status === "Error") error++;
     });
-    return { total: currentResults.length, clean, suspicious, malicious };
+    return { total: currentResults.length, clean, suspicious, malicious, error };
   };
 
   const stats = getStats();
 
-  // --- EXPORT DOWNLOAD ACTIONS ---
+  // --- EXPORT ACTIONS ---
   const triggerDownload = (content: string, filename: string, mime: string) => {
     const blob = new Blob([content], { type: mime });
     const url = window.URL.createObjectURL(blob);
@@ -237,12 +265,12 @@ export default function App() {
     if (activeTab === "domain" && !domainResults.length) return;
     let csvContent = "";
     if (activeTab === "ip") {
-      const headers = ["IP Address", "Status", "Confidence Score", "Total Reports", "Distinct Users", "Country Code", "ISP", "Data Intelligence Source"];
-      const rows = ipResults.map(r => [`"${r.target}"`, `"${r.status}"`, `"${r.abuseConfidenceScore}"`, `"${r.totalReports}"`, `"${r.numDistinctUsers}"`, `"${r.countryCode}"`, `"${r.isp}"`, `"${r.dataSource}"`]);
+      const headers = ["IP Address", "Status", "Confidence Score", "Total Reports", "Distinct Users", "Country Code", "ISP", "Source/Error"];
+      const rows = ipResults.map(r => [`"${r.target}"`, `"${r.status}"`, `"${r.abuseConfidenceScore}"`, `"${r.totalReports}"`, `"${r.numDistinctUsers}"`, `"${r.countryCode}"`, `"${r.isp}"`, `"${r.status === "Error" ? r.errorDetails : r.dataSource}"`]);
       csvContent = [headers.join(","), ...rows.map(row => row.join(","))].join("\n");
     } else {
-      const headers = ["Domain/URL", "Status", "Malicious Count", "Suspicious Count", "Total Engines", "Categories", "Data Intelligence Source"];
-      const rows = domainResults.map(r => [`"${r.target}"`, `"${r.status}"`, `"${r.maliciousCount}"`, `"${r.suspiciousCount}"`, `"${r.totalEngines}"`, `"${r.categories}"`, `"${r.dataSource}"`]);
+      const headers = ["Domain/URL", "Status", "Malicious Count", "Suspicious Count", "Total Engines", "Categories", "Source/Error"];
+      const rows = domainResults.map(r => [`"${r.target}"`, `"${r.status}"`, `"${r.maliciousCount}"`, `"${r.suspiciousCount}"`, `"${r.totalEngines}"`, `"${r.categories}"`, `"${r.status === "Error" ? r.errorDetails : r.dataSource}"`]);
       csvContent = [headers.join(","), ...rows.map(row => row.join(","))].join("\n");
     }
     triggerDownload(csvContent, `${activeTab}-scan-${ts()}.csv`, "text/csv;charset=utf-8;");
@@ -261,7 +289,7 @@ export default function App() {
       `BULK REPUTATION SCAN REPORT`,
       `Generated : ${new Date().toUTCString()}`,
       `Scan Type : ${activeTab.toUpperCase()}`,
-      `Summary   : Total: ${stats.total} | Clean: ${stats.clean} | Suspicious: ${stats.suspicious} | Malicious: ${stats.malicious}`,
+      `Summary   : Total: ${stats.total} | Clean: ${stats.clean} | Suspicious: ${stats.suspicious} | Malicious: ${stats.malicious} | Failures: ${stats.error}`,
       `------------------------------------------------------------------------`,
       ""
     ];
@@ -269,18 +297,27 @@ export default function App() {
       ipResults.forEach((r) => {
         lines.push(`TARGET      : ${r.target}`);
         lines.push(`STATUS      : ${r.status.toUpperCase()}`);
-        lines.push(`ABUSE SCORE : ${r.abuseConfidenceScore}/100`);
-        lines.push(`REPORTS     : ${r.totalReports ?? 0} (${r.numDistinctUsers ?? 0} distinct users)`);
-        lines.push(`ISP         : ${r.isp} (${r.countryCode})`);
-        lines.push(`INTEL LOG   : Resolved via ${r.dataSource}`);
+        if (r.status === "Error") {
+          lines.push(`ERROR TRACE : ${r.errorDetails}`);
+        } else {
+          lines.push(`ABUSE SCORE : ${r.abuseConfidenceScore}/100`);
+          lines.push(`REPORTS     : ${r.totalReports ?? 0} (${r.numDistinctUsers ?? 0} distinct users)`);
+          lines.push(`ISP         : ${r.isp} (${r.countryCode})`);
+          lines.push(`INTEL LOG   : Resolved via ${r.dataSource}`);
+        }
         lines.push(`------------------------------------------------------------------------`, "");
       });
     } else {
       domainResults.forEach((r) => {
         lines.push(`TARGET     : ${r.target}`);
         lines.push(`STATUS     : ${r.status.toUpperCase()}`);
-        lines.push(`DETECTIONS : ${r.maliciousCount} malicious / ${r.suspiciousCount} suspicious`);
-        lines.push(`INTEL LOG  : Resolved via ${r.dataSource}`);
+        if (r.status === "Error") {
+          lines.push(`ERROR TRACE: ${r.errorDetails}`);
+        } else {
+          lines.push(`DETECTIONS : ${r.maliciousCount} malicious / ${r.suspiciousCount} suspicious`);
+          lines.push(`CATEGORIES : ${r.categories}`);
+          lines.push(`INTEL LOG  : Resolved via ${r.dataSource}`);
+        }
         lines.push(`------------------------------------------------------------------------`, "");
       });
     }
@@ -347,6 +384,9 @@ export default function App() {
                 </ol>
               </div>
             </div>
+            <p style={{ marginTop: '12px', marginBottom: 0, fontSize: '12px', color: '#64748b', fontWeight: 'bold' }}>
+              ⚠️ Note: This app routes through a temporary cors proxy for client-side functionality. Ensure you allow proxy traffic if requested by your browser.
+            </p>
           </div>
         )}
 
@@ -396,7 +436,7 @@ export default function App() {
           </div>
         )}
 
-        <textarea rows={6} style={{ width: '100%', fontFamily: 'monospace', padding: '12px', border: '1px solid #cbd5e1', borderRadius: '6px', boxSizing: 'border-box', fontSize: '14px' }} placeholder={activeTab === "ip" ? "Enter raw IPs (one per line or comma-separated)..." : "Enter malicious domain domains..."} value={inputText} onChange={(e) => setInputText(e.target.value)} disabled={isPending || !isAuthSaved} />
+        <textarea rows={6} style={{ width: '100%', fontFamily: 'monospace', padding: '12px', border: '1px solid #cbd5e1', borderRadius: '6px', boxSizing: 'border-box', fontSize: '14px' }} placeholder={activeTab === "ip" ? "Enter raw IPs (one per line or comma-separated)..." : "Enter domains or complete URLs (e.g., https://malicious-site.com)..."} value={inputText} onChange={(e) => setInputText(e.target.value)} disabled={isPending || !isAuthSaved} />
 
         <div style={{ display: 'flex', marginTop: '15px', alignItems: 'center' }}>
           <span style={{ fontSize: '14px', color: '#718096', fontWeight: '500' }}>{targetCount} IOCs Loaded</span>
@@ -416,6 +456,7 @@ export default function App() {
               <span style={{ background: '#c6f6d5', color: '#22543d', padding: '4px 10px', borderRadius: '6px', fontSize: '13px', fontWeight: '700' }}>Clean: {stats.clean}</span>
               <span style={{ background: '#feebc8', color: '#744210', padding: '4px 10px', borderRadius: '6px', fontSize: '13px', fontWeight: '700' }}>Suspicious: {stats.suspicious}</span>
               <span style={{ background: '#fed7d7', color: '#742a2a', padding: '4px 10px', borderRadius: '6px', fontSize: '13px', fontWeight: '700' }}>Malicious: {stats.malicious}</span>
+              {stats.error > 0 && <span style={{ background: '#cbd5e1', color: '#334155', padding: '4px 10px', borderRadius: '6px', fontSize: '13px', fontWeight: '700' }}>Failed: {stats.error}</span>}
             </div>
             <div style={{ display: 'flex', gap: '6px' }}>
               <button onClick={exportCsv} style={{ padding: '6px 14px', background: '#edf2f7', border: '1px solid #cbd5e1', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600', color: '#2d3748' }}>Export CSV</button>
@@ -441,11 +482,11 @@ export default function App() {
                     <tr key={i} style={{ borderBottom: '1px solid #e2e8f0' }}>
                       <td style={{ padding: '12px 20px', fontFamily: 'monospace', fontWeight: '600' }}>{r.target}</td>
                       <td style={{ padding: '12px 20px' }}>
-                        <span style={{ background: r.status === "Clean" ? "#c6f6d5" : r.status === "Suspicious" ? "#feebc8" : r.status === "Error" ? "#e2e8f0" : "#fed7d7", color: r.status === "Clean" ? "#22543d" : r.status === "Suspicious" ? "#744210" : r.status === "Error" ? "#475569" : "#742a2a", padding: '4px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 'bold' }}>{r.status}</span>
+                        <span style={{ background: r.status === "Clean" ? "#c6f6d5" : r.status === "Suspicious" ? "#feebc8" : r.status === "Error" ? "#cbd5e1" : "#fed7d7", color: r.status === "Clean" ? "#22543d" : r.status === "Suspicious" ? "#744210" : r.status === "Error" ? "#334155" : "#742a2a", padding: '4px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 'bold' }}>{r.status}</span>
                       </td>
-                      <td style={{ padding: '12px 20px', fontWeight: '500' }}>{r.abuseConfidenceScore}/100</td>
-                      <td style={{ padding: '12px 20px', color: '#4a5568' }}>{r.totalReports} reports ({r.isp})</td>
-                      <td style={{ padding: '12px 20px', color: '#2b6cb0', fontSize: '13px', fontWeight: '600' }}>🔍 {r.dataSource}</td>
+                      <td style={{ padding: '12px 20px', fontWeight: '500' }}>{r.status === "Error" ? "N/A" : `${r.abuseConfidenceScore}/100`}</td>
+                      <td style={{ padding: '12px 20px', color: '#4a5568' }}>{r.status === "Error" ? r.errorDetails : `${r.totalReports} reports (${r.isp})`}</td>
+                      <td style={{ padding: '12px 20px', color: r.status === "Error" ? "#ef4444" : '#2b6cb0', fontSize: '13px', fontWeight: '600' }}>{r.status === "Error" ? "❌ Fault Trace" : `🔍 ${r.dataSource}`}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -458,7 +499,7 @@ export default function App() {
               <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '14px', minWidth: '600px' }}>
                 <thead>
                   <tr style={{ background: '#edf2f7', borderBottom: '1px solid #e2e8f0', color: '#4a5568' }}>
-                    <th style={{ padding: '12px 20px' }}>Domain</th>
+                    <th style={{ padding: '12px 20px' }}>Domain / URL</th>
                     <th style={{ padding: '12px 20px' }}>Verdict</th>
                     <th style={{ padding: '12px 20px' }}>Detections Breakdown</th>
                     <th style={{ padding: '12px 20px' }}>Intelligence Origin</th>
@@ -467,14 +508,14 @@ export default function App() {
                 <tbody>
                   {domainResults.map((r, i) => (
                     <tr key={i} style={{ borderBottom: '1px solid #e2e8f0' }}>
-                      <td style={{ padding: '12px 20px', fontFamily: 'monospace', fontWeight: '600' }}>{r.target}</td>
+                      <td style={{ padding: '12px 20px', fontFamily: 'monospace', fontWeight: '600', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.target}>{r.target}</td>
                       <td style={{ padding: '12px 20px' }}>
-                        <span style={{ background: r.status === "Clean" ? "#c6f6d5" : r.status === "Suspicious" ? "#feebc8" : r.status === "Error" ? "#e2e8f0" : "#fed7d7", color: r.status === "Clean" ? "#22543d" : r.status === "Suspicious" ? "#744210" : r.status === "Error" ? "#475569" : "#742a2a", padding: '4px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 'bold' }}>{r.status}</span>
+                        <span style={{ background: r.status === "Clean" ? "#c6f6d5" : r.status === "Suspicious" ? "#feebc8" : r.status === "Error" ? "#cbd5e1" : "#fed7d7", color: r.status === "Clean" ? "#22543d" : r.status === "Suspicious" ? "#744210" : r.status === "Error" ? "#334155" : "#742a2a", padding: '4px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 'bold' }}>{r.status}</span>
                       </td>
                       <td style={{ padding: '12px 20px', fontWeight: '500' }}>
-                        <span style={{ color: '#e53e3e' }}>{r.maliciousCount} mal</span> / <span style={{ color: '#dd6b20' }}>{r.suspiciousCount} susp</span> ({r.totalEngines} engines)
+                        {r.status === "Error" ? <span style={{ color: '#475569' }}>{r.errorDetails}</span> : (<><span style={{ color: '#e53e3e' }}>{r.maliciousCount} mal</span> / <span style={{ color: '#dd6b20' }}>{r.suspiciousCount} susp</span> ({r.totalEngines} engines)</>)}
                       </td>
-                      <td style={{ padding: '12px 20px', color: '#2b6cb0', fontSize: '13px', fontWeight: '600' }}>🔍 {r.dataSource}</td>
+                      <td style={{ padding: '12px 20px', color: r.status === "Error" ? "#ef4444" : '#2b6cb0', fontSize: '13px', fontWeight: '600' }}>{r.status === "Error" ? "❌ Fault Trace" : `🔍 ${r.dataSource}`}</td>
                     </tr>
                   ))}
                 </tbody>
