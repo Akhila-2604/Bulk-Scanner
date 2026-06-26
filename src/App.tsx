@@ -64,6 +64,7 @@ export default function App() {
     setDomainResults([]);
   };
 
+  // Declared before execution to satisfy standard TypeScript compiler order
   const parseAbuseIpData = (ip: string, data: any): IpResult => {
     let verdict: "Clean" | "Suspicious" | "Malicious" = "Clean";
     if (data.abuseConfidenceScore > 75) verdict = "Malicious";
@@ -81,7 +82,7 @@ export default function App() {
     };
   };
 
-  // --- THREAT HUNTING RESOLUTION ENGINE (QUERY AUTH PARAM ROUTING) ---
+  // --- THREAT HUNTING RESOLUTION ENGINE ---
   const handleSubmit = async () => {
     if (!isAuthSaved) {
       setAuthError("Triage Cancelled: Authenticate your integration keys before scanning.");
@@ -106,7 +107,6 @@ export default function App() {
           targets.map(async (ip): Promise<IpResult> => {
             try {
               if (abuseKey.trim()) {
-                // Key appended directly as query param to prevent header drops via client extensions
                 const targetApiUrl = `https://api.abuseipdb.com/api/v2/check?ipAddress=${encodeURIComponent(ip)}&maxAgeInDays=90&key=${encodeURIComponent(abuseKey.trim())}`;
                 const proxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(targetApiUrl)}`;
 
