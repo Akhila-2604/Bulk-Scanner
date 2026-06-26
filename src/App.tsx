@@ -64,7 +64,24 @@ export default function App() {
     setDomainResults([]);
   };
 
-  // --- THREAT HUNTING RESOLUTION ENGINE (CORS-COMPATIBLE PRO) ---
+  const parseAbuseIpData = (ip: string, data: any): IpResult => {
+    let verdict: "Clean" | "Suspicious" | "Malicious" = "Clean";
+    if (data.abuseConfidenceScore > 75) verdict = "Malicious";
+    else if (data.abuseConfidenceScore > 25) verdict = "Suspicious";
+
+    return {
+      target: ip,
+      status: verdict,
+      abuseConfidenceScore: data.abuseConfidenceScore || 0,
+      totalReports: data.totalReports || 0,
+      numDistinctUsers: data.numDistinctUsers || 0,
+      countryCode: data.countryCode || "Global",
+      isp: data.isp || "Unknown Provider",
+      dataSource: "AbuseIPDB Core Feed",
+    };
+  };
+
+  // --- THREAT HUNTING RESOLUTION ENGINE (QUERY AUTH PARAM ROUTING) ---
   const handleSubmit = async () => {
     if (!isAuthSaved) {
       setAuthError("Triage Cancelled: Authenticate your integration keys before scanning.");
@@ -88,42 +105,20 @@ export default function App() {
         const results = await Promise.all(
           targets.map(async (ip): Promise<IpResult> => {
             try {
-              // 1. AbuseIPDB Verification via Edge Proxy Pipeline
               if (abuseKey.trim()) {
-                const targetApiUrl = `https://api.abuseipdb.com/api/v2/check?ipAddress=${encodeURIComponent(ip)}&maxAgeInDays=90`;
-                // Prepends the edge proxy to dynamically bypass static origin context constraints
+                // Key appended directly as query param to prevent header drops via client extensions
+                const targetApiUrl = `https://api.abuseipdb.com/api/v2/check?ipAddress=${encodeURIComponent(ip)}&maxAgeInDays=90&key=${encodeURIComponent(abuseKey.trim())}`;
                 const proxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(targetApiUrl)}`;
 
-                const response = await fetch(proxyUrl, {
-                  method: "GET",
-                  headers: {
-                    "Key": abuseKey.trim(),
-                    "Accept": "application/json"
-                  }
-                });
-
-                if (!response.ok) throw new Error(`AbuseIPDB responded with HTTP ${response.status}`);
+                const response = await fetch(proxyUrl, { method: "GET" });
+                if (!response.ok) throw new Error(`HTTP Endpoint Error: ${response.status}`);
                 
                 const res = await response.json();
-                const data = res.data;
-                
-                let verdict: "Clean" | "Suspicious" | "Malicious" = "Clean";
-                if (data.abuseConfidenceScore > 75) verdict = "Malicious";
-                else if (data.abuseConfidenceScore > 25) verdict = "Suspicious";
+                if (res.errors) throw new Error(res.errors[0].detail || "API Key Verification Failed.");
 
-                return {
-                  target: ip,
-                  status: verdict,
-                  abuseConfidenceScore: data.abuseConfidenceScore || 0,
-                  totalReports: data.totalReports || 0,
-                  numDistinctUsers: data.numDistinctUsers || 0,
-                  countryCode: data.countryCode || "Global",
-                  isp: data.isp || "Unknown Provider",
-                  dataSource: "AbuseIPDB Core Feed",
-                };
+                return parseAbuseIpData(ip, res.data);
               } 
               
-              // 2. Fallback direct connection for VirusTotal IP
               if (vtKey.trim()) {
                 const targetUrl = `https://www.virustotal.com/api/v3/ip_addresses/${encodeURIComponent(ip)}`;
                 const proxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`;
@@ -133,7 +128,7 @@ export default function App() {
                   headers: { "x-apikey": vtKey.trim() },
                 });
 
-                if (!response.ok) throw new Error(`VirusTotal responded with HTTP ${response.status}`);
+                if (!response.ok) throw new Error(`VirusTotal Error Status ${response.status}`);
                 const res = await response.json();
                 const stats = res.data.attributes.last_analysis_stats;
                 
@@ -164,14 +159,13 @@ export default function App() {
                 countryCode: "N/A",
                 isp: "Scan Unresolved",
                 dataSource: "Fault Diagnostics",
-                errorDetails: err.message || "Connection Interrupted"
+                errorDetails: err.message || "Network Error"
               };
             }
           })
         );
         setIpResults(results);
       } else {
-        // Domain and URL Engine (VirusTotal Edge Proxy Routing Setup)
         const results = await Promise.all(
           targets.map(async (inputItem): Promise<DomainResult> => {
             try {
@@ -195,7 +189,7 @@ export default function App() {
                 headers: { "x-apikey": vtKey.trim() },
               });
 
-              if (!response.ok) throw new Error(`VirusTotal responded with HTTP ${response.status}`);
+              if (!response.ok) throw new Error(`VirusTotal Error Status ${response.status}`);
               const res = await response.json();
               const stats = res.data.attributes.last_analysis_stats;
 
@@ -221,7 +215,7 @@ export default function App() {
                 totalEngines: 0,
                 categories: "Resolution Failed",
                 dataSource: "Fault Diagnostics",
-                errorDetails: err.message || "Connection Interrupted"
+                errorDetails: err.message || "Network Error"
               };
             }
           })
@@ -235,7 +229,6 @@ export default function App() {
     }
   };
 
-  // --- STATS SYSTEM ---
   const getStats = () => {
     const currentResults = activeTab === "ip" ? ipResults : domainResults;
     let clean = 0, suspicious = 0, malicious = 0, error = 0;
@@ -250,7 +243,6 @@ export default function App() {
 
   const stats = getStats();
 
-  // --- EXPORT DOWNLOAD ACTIONS ---
   const triggerDownload = (content: string, filename: string, mime: string) => {
     const blob = new Blob([content], { type: mime });
     const url = window.URL.createObjectURL(blob);
@@ -268,11 +260,11 @@ export default function App() {
     if (activeTab === "domain" && !domainResults.length) return;
     let csvContent = "";
     if (activeTab === "ip") {
-      const headers = ["IP Address", "Status", "Confidence Score", "Total Reports", "Distinct Users", "Country Code", "ISP", "Data Intelligence Source"];
+      const headers = ["IP Address", "Status", "Confidence Score", "Total Reports", "Distinct Users", "Country Code", "ISP", "Source/Error"];
       const rows = ipResults.map(r => [`"${r.target}"`, `"${r.status}"`, `"${r.abuseConfidenceScore}"`, `"${r.totalReports}"`, `"${r.numDistinctUsers}"`, `"${r.countryCode}"`, `"${r.isp}"`, `"${r.status === "Error" ? r.errorDetails : r.dataSource}"`]);
       csvContent = [headers.join(","), ...rows.map(row => row.join(","))].join("\n");
     } else {
-      const headers = ["Domain/URL", "Status", "Malicious Count", "Suspicious Count", "Total Engines", "Categories", "Data Intelligence Source"];
+      const headers = ["Domain/URL", "Status", "Malicious Count", "Suspicious Count", "Total Engines", "Categories", "Source/Error"];
       const rows = domainResults.map(r => [`"${r.target}"`, `"${r.status}"`, `"${r.maliciousCount}"`, `"${r.suspiciousCount}"`, `"${r.totalEngines}"`, `"${r.categories}"`, `"${r.status === "Error" ? r.errorDetails : r.dataSource}"`]);
       csvContent = [headers.join(","), ...rows.map(row => row.join(","))].join("\n");
     }
@@ -286,8 +278,6 @@ export default function App() {
   };
 
   const exportTxt = () => {
-    const NavResults = activeTab === "ip" ? ipResults : domainResults;
-    if (!NavResults.length) return;
     const lines = [
       `BULK REPUTATION SCAN REPORT`,
       `Generated : ${new Date().toUTCString()}`,
